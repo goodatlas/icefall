@@ -48,11 +48,9 @@ def compute_fbank_zeroth():
     num_mel_bins = 80
 
     dataset_parts = (
-        "recData01",
-        "recData02",
-        "recData03",
-        "testData01",
-        "testData02",
+        "train",
+        "dev",
+        "test",
     )
     manifests = read_manifests_if_cached(
         dataset_parts=dataset_parts, output_dir=src_dir

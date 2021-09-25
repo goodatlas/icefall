@@ -311,16 +311,7 @@ class ZerothSpeechAsrDataModule(DataModule):
     def train_cuts(self) -> CutSet:
         logging.info("About to get train cuts")
         cuts_train = load_manifest(
-            self.args.feature_dir / "cuts_recData01.json.gz"
-        )
-        cuts_train = (
-            cuts_train
-            + load_manifest(
-                self.args.feature_dir / "cuts_recData02.json.gz"
-            )
-            + load_manifest(
-                self.args.feature_dir / "cuts_recData03.json.gz"
-            )
+            self.args.feature_dir / "cuts_train.json.gz"
         )
         return cuts_train
 
@@ -328,13 +319,13 @@ class ZerothSpeechAsrDataModule(DataModule):
     def valid_cuts(self) -> CutSet:
         logging.info("About to get dev cuts")
         cuts_valid = load_manifest(
-            self.args.feature_dir / "cuts_testData02.json.gz"
+            self.args.feature_dir / "cuts_dev.json.gz"
         )
         return cuts_valid
 
     @lru_cache()
     def test_cuts(self) -> List[CutSet]:
-        test_sets = ["testData01"]
+        test_sets = ["test"]
         cuts = []
         for test_set in test_sets:
             logging.debug("About to get test cuts")
