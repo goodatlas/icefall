@@ -39,7 +39,7 @@ from torch.utils.tensorboard import SummaryWriter
 from icefall.checkpoint import load_checkpoint
 from icefall.checkpoint import save_checkpoint as save_checkpoint_impl
 from icefall.dist import cleanup_dist, setup_dist
-from icefall.graph_compiler import CtcTrainingGraphCompiler
+from icefall.bpe_graph_compiler import BpeCtcTrainingGraphCompiler
 from icefall.lexicon import Lexicon
 from icefall.utils import (
     AttributeDict,
@@ -152,7 +152,7 @@ def get_params() -> AttributeDict:
     params = AttributeDict(
         {
             "exp_dir": Path("tdnn_lstm_ctc/exp"),
-            "lang_dir": Path("data/lang_phone"),
+            "lang_dir": Path("data/lang_bpe"),
             "lr": 1e-3,
             "feature_dim": 80,
             "weight_decay": 5e-4,
@@ -265,7 +265,7 @@ def compute_loss(
     params: AttributeDict,
     model: nn.Module,
     batch: dict,
-    graph_compiler: CtcTrainingGraphCompiler,
+    graph_compiler: BpeCtcTrainingGraphCompiler,
     is_training: bool,
 ):
     """
@@ -306,7 +306,10 @@ def compute_loss(
     supervision_segments, texts = encode_supervisions(
         supervisions, subsampling_factor=params.subsampling_factor
     )
-    decoding_graph = graph_compiler.compile(texts)
+
+    token_ids = graph_compiler.texts_to_ids(texts)
+
+    decoding_graph = graph_compiler.compile(token_ids)
 
     dense_fsa_vec = k2.DenseFsaVec(
         nnet_output,
@@ -336,7 +339,7 @@ def compute_loss(
 def compute_validation_loss(
     params: AttributeDict,
     model: nn.Module,
-    graph_compiler: CtcTrainingGraphCompiler,
+    graph_compiler: BpeCtcTrainingGraphCompiler,
     valid_dl: torch.utils.data.DataLoader,
     world_size: int = 1,
 ) -> None:
@@ -379,7 +382,7 @@ def train_one_epoch(
     params: AttributeDict,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    graph_compiler: CtcTrainingGraphCompiler,
+    graph_compiler: BpeCtcTrainingGraphCompiler,
     train_dl: torch.utils.data.DataLoader,
     valid_dl: torch.utils.data.DataLoader,
     tb_writer: Optional[SummaryWriter] = None,
@@ -521,17 +524,24 @@ def run(rank, world_size, args):
         tb_writer = None
 
     lexicon = Lexicon(params.lang_dir)
-    max_phone_id = max(lexicon.tokens)
+    max_token_id = max(lexicon.tokens)
+    num_classes = max_token_id + 1  # +1 for the blank
 
     device = torch.device("cpu")
     if torch.cuda.is_available():
         device = torch.device("cuda", rank)
 
-    graph_compiler = CtcTrainingGraphCompiler(lexicon=lexicon, device=device)
+    graph_compiler = BpeCtcTrainingGraphCompiler(
+        params.lang_dir,
+        device=device,
+        sos_token="<sos/eos>",
+        eos_token="<sos/eos>",
+    )
 
+    logging.info("About to create model")
     model = TdnnLstm(
         num_features=params.feature_dim,
-        num_classes=max_phone_id + 1,  # +1 for the blank symbol
+        num_classes=num_classes,
         subsampling_factor=params.subsampling_factor,
     )
 
