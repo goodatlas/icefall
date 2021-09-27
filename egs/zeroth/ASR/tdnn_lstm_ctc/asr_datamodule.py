@@ -331,7 +331,7 @@ class ZerothSpeechAsrDataModule(DataModule):
             logging.debug("About to get test cuts")
             cuts.append(
                 load_manifest(
-                    self.args.feature_dir / f"cuts_{test_sets}.json.gz"
+                    self.args.feature_dir / f"cuts_{test_set}.json.gz"
                 )
             )
         return cuts

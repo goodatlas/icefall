@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 import k2
 import torch
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule
+from asr_datamodule import ZerothSpeechAsrDataModule
 from model import TdnnLstm
 
 from icefall.checkpoint import average_checkpoints, load_checkpoint
@@ -125,7 +125,7 @@ def get_params() -> AttributeDict:
     params = AttributeDict(
         {
             "exp_dir": Path("tdnn_lstm_ctc/exp/"),
-            "lang_dir": Path("data/lang_phone"),
+            "lang_dir": Path("data/lang_bpe"),
             "lm_dir": Path("data/lm"),
             "feature_dim": 80,
             "subsampling_factor": 3,
@@ -210,7 +210,7 @@ def decode_one_batch(
 
     lattice = get_lattice(
         nnet_output=nnet_output,
-        HLG=HLG,
+        decoding_graph=HLG,
         supervision_segments=supervision_segments,
         search_beam=params.search_beam,
         output_beam=params.output_beam,
@@ -373,7 +373,7 @@ def save_results(
 @torch.no_grad()
 def main():
     parser = get_parser()
-    LibriSpeechAsrDataModule.add_arguments(parser)
+    ZerothSpeechAsrDataModule.add_arguments(parser)
     args = parser.parse_args()
 
     params = get_params()
@@ -463,15 +463,15 @@ def main():
     model.to(device)
     model.eval()
 
-    librispeech = LibriSpeechAsrDataModule(args)
+    zerothspeech = ZerothSpeechAsrDataModule(args)
     # CAUTION: `test_sets` is for displaying only.
     # If you want to skip test-clean, you have to skip
     # it inside the for loop. That is, use
     #
     #   if test_set == 'test-clean': continue
     #
-    test_sets = ["test-clean", "test-other"]
-    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
+    test_sets = ["test"]
+    for test_set, test_dl in zip(test_sets, zerothspeech.test_dataloaders()):
         results_dict = decode_dataset(
             dl=test_dl,
             params=params,
