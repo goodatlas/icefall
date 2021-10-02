@@ -117,7 +117,7 @@ def get_params() -> AttributeDict:
         {
             "feature_dim": 80,
             "subsampling_factor": 3,
-            "num_classes": 72,
+            "num_classes": 65,
             "sample_rate": 16000,
             "search_beam": 20,
             "output_beam": 5,
@@ -232,7 +232,7 @@ def main():
 
     lattice = get_lattice(
         nnet_output=nnet_output,
-        HLG=HLG,
+        decoding_graph=HLG,
         supervision_segments=supervision_segments,
         search_beam=params.search_beam,
         output_beam=params.output_beam,

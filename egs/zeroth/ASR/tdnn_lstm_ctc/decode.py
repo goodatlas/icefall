@@ -125,7 +125,7 @@ def get_params() -> AttributeDict:
     params = AttributeDict(
         {
             "exp_dir": Path("tdnn_lstm_ctc/exp/"),
-            "lang_dir": Path("data/lang_bpe"),
+            "lang_dir": Path("data/lang_phone"),
             "lm_dir": Path("data/lm"),
             "feature_dim": 80,
             "subsampling_factor": 3,
@@ -341,6 +341,7 @@ def save_results(
     results_dict: Dict[str, List[Tuple[List[int], List[int]]]],
 ):
     test_set_wers = dict()
+    test_set_cers = dict()
     for key, results in results_dict.items():
         recog_path = params.exp_dir / f"recogs-{test_set_name}-{key}.txt"
         store_transcripts(filename=recog_path, texts=results)
@@ -353,6 +354,11 @@ def save_results(
             wer = write_error_stats(f, f"{test_set_name}-{key}", results)
             test_set_wers[key] = wer
 
+        errs_filename = params.exp_dir / f"errs-cer-{test_set_name}-{key}.txt"
+        with open(errs_filename, "w") as f:
+            cer = write_error_stats(f, f"{test_set_name}-{key}", results, True)
+            test_set_cers[key] = cer
+
         logging.info("Wrote detailed error stats to {}".format(errs_filename))
 
     test_set_wers = sorted(test_set_wers.items(), key=lambda x: x[1])
@@ -362,9 +368,23 @@ def save_results(
         for key, val in test_set_wers:
             print("{}\t{}".format(key, val), file=f)
 
+    test_set_cers = sorted(test_set_cers.items(), key=lambda x: x[1])
+    errs_info = params.exp_dir / f"cer-summary-{test_set_name}.txt"
+    with open(errs_info, "w") as f:
+        print("settings\tCER", file=f)
+        for key, val in test_set_cers:
+            print("{}\t{}".format(key, val), file=f)
+
     s = "\nFor {}, WER of different settings are:\n".format(test_set_name)
     note = "\tbest for {}".format(test_set_name)
     for key, val in test_set_wers:
+        s += "{}\t{}{}\n".format(key, val, note)
+        note = ""
+    logging.info(s)
+
+    s = "\nFor {}, CER of different settings are:\n".format(test_set_name)
+    note = "\tbest for {}".format(test_set_name)
+    for key, val in test_set_cers:
         s += "{}\t{}{}\n".format(key, val, note)
         note = ""
     logging.info(s)
