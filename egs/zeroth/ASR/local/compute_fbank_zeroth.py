@@ -49,8 +49,10 @@ def compute_fbank_zeroth():
 
     dataset_parts = (
         "train",
+        "train2",
         "dev",
         "test",
+        "test2",
     )
     manifests = read_manifests_if_cached(
         dataset_parts=dataset_parts, output_dir=src_dir

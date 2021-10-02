@@ -313,6 +313,13 @@ class ZerothSpeechAsrDataModule(DataModule):
         cuts_train = load_manifest(
             self.args.feature_dir / "cuts_train.json.gz"
         )
+
+        # cuts_train = (
+        #        cuts_train
+        #        + load_manifest(
+        #            self.args.feature_dir / "cuts_train2.json.gz"
+        #        )
+        #    )
         return cuts_train
 
     @lru_cache()
@@ -325,7 +332,7 @@ class ZerothSpeechAsrDataModule(DataModule):
 
     @lru_cache()
     def test_cuts(self) -> List[CutSet]:
-        test_sets = ["test"]
+        test_sets = ["test", "test2"]
         cuts = []
         for test_set in test_sets:
             logging.debug("About to get test cuts")
