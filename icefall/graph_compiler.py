@@ -21,6 +21,7 @@ import k2
 import torch
 
 from icefall.lexicon import Lexicon
+from icefall.g2p import convert_text_to_phone_sequence
 
 
 class CtcTrainingGraphCompiler(object):
@@ -48,6 +49,7 @@ class CtcTrainingGraphCompiler(object):
         self.L_inv = k2.arc_sort(L_inv)
         self.oov_id = lexicon.word_table[oov]
         self.word_table = lexicon.word_table
+        self.token_table = lexicon.token_table
 
         max_token_id = max(lexicon.tokens)
         ctc_topo = k2.ctc_topo(max_token_id, modified=False)
@@ -124,3 +126,22 @@ class CtcTrainingGraphCompiler(object):
         # we need to invert it
         ans_fsa = fsa.invert_()
         return k2.arc_sort(ans_fsa)
+
+    def texts_to_ids(self, texts: List[str]) -> List[List[int]]:
+        """Convert a list of texts to a list-of-list of piece IDs.
+
+        Args:
+          texts:
+            It is a list of strings. Each string consists of space(s)
+            separated words. An example containing two strings is given below:
+
+                ['HELLO ICEFALL', 'HELLO k2']
+        Returns:
+          Return a list-of-list of piece IDs.
+        """
+        ret = []
+        for text in texts:
+            phone_seq, _ = convert_text_to_phone_sequence(text)
+            id_seq = [self.token_table[phone] for phone in phone_seq]
+            ret.append(id_seq)
+        return ret
