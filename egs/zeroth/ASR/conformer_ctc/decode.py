@@ -26,10 +26,10 @@ import k2
 import sentencepiece as spm
 import torch
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule
+from asr_datamodule import ZerothSpeechAsrDataModule
 from conformer import Conformer
 
-from icefall.bpe_graph_compiler import BpeCtcTrainingGraphCompiler
+from icefall.graph_compiler import CtcTrainingGraphCompiler
 from icefall.checkpoint import average_checkpoints, load_checkpoint
 from icefall.decode import (
     get_lattice,
@@ -66,7 +66,7 @@ def get_parser():
     parser.add_argument(
         "--avg",
         type=int,
-        default=20,
+        default=10,
         help="Number of checkpoints to average. Automatically select "
         "consecutive checkpoints before the checkpoint specified by "
         "'--epoch'. ",
@@ -142,7 +142,7 @@ def get_parser():
     parser.add_argument(
         "--lang-dir",
         type=str,
-        default="data/lang_bpe",
+        default="data/lang_phone",
         help="The lang dir",
     )
 
@@ -488,6 +488,7 @@ def save_results(
     else:
         enable_log = True
     test_set_wers = dict()
+    test_set_cers = dict()
     for key, results in results_dict.items():
         recog_path = params.exp_dir / f"recogs-{test_set_name}-{key}.txt"
         store_transcripts(filename=recog_path, texts=results)
@@ -508,11 +509,28 @@ def save_results(
                 "Wrote detailed error stats to {}".format(errs_filename)
             )
 
+        errs_filename = params.exp_dir / f"errs-cer-{test_set_name}-{key}.txt"
+        with open(errs_filename, "w") as f:
+            cer = write_error_stats(f, f"{test_set_name}-{key}", results, True)
+            test_set_cers[key] = cer
+
+        if enable_log:
+            logging.info(
+                "Wrote detailed error stats to {}".format(errs_filename)
+            )
+
     test_set_wers = sorted(test_set_wers.items(), key=lambda x: x[1])
     errs_info = params.exp_dir / f"wer-summary-{test_set_name}.txt"
     with open(errs_info, "w") as f:
         print("settings\tWER", file=f)
         for key, val in test_set_wers:
+            print("{}\t{}".format(key, val), file=f)
+
+    test_set_cers = sorted(test_set_cers.items(), key=lambda x: x[1])
+    errs_info = params.exp_dir / f"cer-summary-{test_set_name}.txt"
+    with open(errs_info, "w") as f:
+        print("settings\tCER", file=f)
+        for key, val in test_set_cers:
             print("{}\t{}".format(key, val), file=f)
 
     s = "\nFor {}, WER of different settings are:\n".format(test_set_name)
@@ -522,11 +540,18 @@ def save_results(
         note = ""
     logging.info(s)
 
+    s = "\nFor {}, CER of different settings are:\n".format(test_set_name)
+    note = "\tbest for {}".format(test_set_name)
+    for key, val in test_set_cers:
+        s += "{}\t{}{}\n".format(key, val, note)
+        note = ""
+    logging.info(s)
+
 
 @torch.no_grad()
 def main():
     parser = get_parser()
-    LibriSpeechAsrDataModule.add_arguments(parser)
+    ZerothSpeechAsrDataModule.add_arguments(parser)
     args = parser.parse_args()
     args.exp_dir = Path(args.exp_dir)
     args.lang_dir = Path(args.lang_dir)
@@ -548,14 +573,12 @@ def main():
 
     logging.info(f"device: {device}")
 
-    graph_compiler = BpeCtcTrainingGraphCompiler(
-        params.lang_dir,
-        device=device,
-        sos_token="<sos/eos>",
-        eos_token="<sos/eos>",
+    graph_compiler = CtcTrainingGraphCompiler(
+        lexicon=lexicon,
+        device=device
     )
-    sos_id = graph_compiler.sos_id
-    eos_id = graph_compiler.eos_id
+    sos_id = 49  # graph_compiler.sos_id
+    eos_id = 49  # graph_compiler.eos_id
 
     if params.method == "ctc-decoding":
         HLG = None
@@ -652,15 +675,15 @@ def main():
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of model parameters: {num_param}")
 
-    librispeech = LibriSpeechAsrDataModule(args)
+    zerothspeech = ZerothSpeechAsrDataModule(args)
     # CAUTION: `test_sets` is for displaying only.
     # If you want to skip test-clean, you have to skip
     # it inside the for loop. That is, use
     #
     #   if test_set == 'test-clean': continue
     #
-    test_sets = ["test-clean", "test-other"]
-    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
+    test_sets = ["test"]
+    for test_set, test_dl in zip(test_sets, zerothspeech.test_dataloaders()):
         results_dict = decode_dataset(
             dl=test_dl,
             params=params,

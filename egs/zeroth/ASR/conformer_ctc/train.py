@@ -343,8 +343,8 @@ def compute_loss(
         use_double_scores=params.use_double_scores,
     )
 
-    sos_id = model.num_classes
-    eos_id = model.num_classes
+    sos_id = 49
+    eos_id = 49
 
     if params.att_rate != 0.0:
         with torch.set_grad_enabled(is_training):
