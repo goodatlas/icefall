@@ -61,6 +61,9 @@ log "dl_dir: $dl_dir"
 if [ $stage -le -1 ] && [ $stop_stage -ge -1 ]; then
   log "stage -1: Download LM"
   [ ! -e $dl_dir/lm ] && mkdir -p $dl_dir/lm
+
+  # This command will download files from aws
+  # aws credential needs to be set through `aws configure` in aws cli
   ./local/download_lm.py --out-dir=$dl_dir/lm
 fi
 
@@ -72,6 +75,8 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   #
   #   ln -sfv /path/to/zeroth $dl_dir/zeroth
   #
+  # This command will download files from aws
+  # aws credential needs to be set through `aws configure` in aws cli
   if [ ! -d $dl_dir/zeroth/train ]; then
     lhotse download zeroth $dl_dir
   fi
