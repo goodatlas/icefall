@@ -1,4 +1,5 @@
 # Copyright    2021 University of Chinese Academy of Sciences (author: Han Zhu)
+# Copyright    2021 Atlaslabs           (author: Lucas Jo)
 #
 # See ../../../../LICENSE for clarification regarding multiple authors
 #

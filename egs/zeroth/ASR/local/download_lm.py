@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright    2021  Xiaomi Corp.        (authors: Fangjun Kuang)
+# Copyright    2021  Atlaslabs           (author: Lucas Jo)
 #
 # See ../../../../LICENSE for clarification regarding multiple authors
 #
@@ -19,12 +20,14 @@
 """
 This file downloads the following Zeroth LM files:
 
-    - 3-gram.pruned.1e-7.arpa.gz
-    - 4-gram.arpa.gz
-    - librispeech-vocab.txt
-    - librispeech-lexicon.txt
+    - zeroth.lm.fg.arpa.gz,
+    - zeroth.lm.tg.arpa.gz,
+    - zeroth.lm.tgmed.arpa.gz,
+    - zeroth.lm.tgsmall.arpa.gz,
+    - zeroth_lexicon,
+    - zeroth_morfessor.seg
 
-from http://www.openslr.org/resources/11
+from AWS s3 
 and save them in the user provided directory.
 
 Files are not re-downloaded if they already exist.
@@ -43,6 +46,7 @@ from pathlib import Path
 
 from lhotse.utils import urlretrieve_progress
 from tqdm.auto import tqdm
+from zeroth_downloader import ZerothSpeechDownloader
 
 
 def get_args():
@@ -54,36 +58,34 @@ def get_args():
 
 
 def main(out_dir: str):
-    url = "http://www.openslr.org/resources/40"
+    zeroth_dl = ZerothSpeechDownloader()
     out_dir = Path(out_dir)
 
     files_to_download = (
-        "zeroth_korean.tar.gz",
+        "zeroth.lm.fg.arpa.gz",
+        "zeroth.lm.tg.arpa.gz",
+        "zeroth.lm.tgmed.arpa.gz",
+        "zeroth.lm.tgsmall.arpa.gz",
+        "zeroth_lexicon",
+        "zeroth_morfessor.seg"
     )
 
-    for f in tqdm(files_to_download, desc="Downloading LibriSpeech LM files"):
+    for f in tqdm(files_to_download, desc="Downloading ZerothSpeech LM files"):
         filename = out_dir / f
         if filename.is_file() is False:
-            urlretrieve_progress(
-                f"{url}/{f}",
-                filename=filename,
-                desc=f"Downloading {filename}",
-            )
+            logging.info(f"{filename} - downloading")
+            zeroth_dl.download(str(f), str(filename))
         else:
             logging.info(f"{filename} already exists - skipping")
 
-        logging.info(f"Etracting {filename}")
-        with tarfile.open(filename) as tar:
-            tar.extractall(path=out_dir)
-
-        # if ".gz" in str(filename):
-        #    unzipped = Path(os.path.splitext(filename)[0])
-        #    if unzipped.is_file() is False:
-        #        with gzip.open(filename, "rb") as f_in:
-        #            with open(unzipped, "wb") as f_out:
-        #                shutil.copyfileobj(f_in, f_out)
-        #    else:
-        #        logging.info(f"{unzipped} already exist - skipping")
+        if ".gz" in str(filename):
+            unzipped = Path(os.path.splitext(filename)[0])
+            if unzipped.is_file() is False:
+                with gzip.open(filename, "rb") as f_in:
+                    with open(unzipped, "wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+            else:
+                logging.info(f"{unzipped} already exist - skipping")
 
 
 if __name__ == "__main__":

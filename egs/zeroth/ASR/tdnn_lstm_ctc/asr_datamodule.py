@@ -1,4 +1,5 @@
 # Copyright      2021  Piotr Żelasko
+# Copyright      2021  Atlaslabs           (author: Lucas Jo)
 #
 # See ../../../../LICENSE for clarification regarding multiple authors
 #
