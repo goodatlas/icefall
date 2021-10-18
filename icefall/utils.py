@@ -34,6 +34,7 @@ import kaldialign
 import lhotse
 import torch
 import torch.distributed as dist
+import sys
 from torch.utils.tensorboard import SummaryWriter
 
 Pathlike = Union[str, Path]
@@ -128,9 +129,15 @@ def setup_logger(
     elif log_level == "critical":
         level = logging.CRITICAL
 
-    logging.basicConfig(
-        filename=log_filename, format=formatter, level=level, filemode="w"
-    )
+    # https://discuss.pytorch.org/t/pytorch-1-8-distributed-mode-will-disable-python-logging-module/113897/7
+    if int(sys.version[0]) == 3 and int(sys.version_info[1]) >= 8:
+        logging.basicConfig(
+            filename=log_filename, format=formatter, level=level, filemode="w", force=True
+        )
+    else:
+        logging.basicConfig(
+            filename=log_filename, format=formatter, level=level, filemode="w"
+        )
     if use_console:
         console = logging.StreamHandler()
         console.setLevel(level)
@@ -397,6 +404,7 @@ def write_error_stats(
     f: TextIO,
     test_set_name: str,
     results: List[Tuple[str, str]],
+    enable_cer: bool = False,
     enable_log: bool = True,
 ) -> float:
     """Write statistics based on predicted results and reference transcripts.
@@ -442,7 +450,16 @@ def write_error_stats(
     words: Dict[str, List[int]] = defaultdict(lambda: [0, 0, 0, 0, 0])
     num_corr = 0
     ERR = "*"
+    wer_str = "WER"
+    ref_len = 0
     for ref, hyp in results:
+        if enable_cer:
+            ref = list(''.join(ref))
+            hyp = list(''.join(hyp))
+            wer_str = "CER"
+
+        ref_len += len(ref)
+
         ali = kaldialign.align(ref, hyp, ERR)
         for ref_word, hyp_word in ali:
             if ref_word == ERR:
@@ -458,7 +475,8 @@ def write_error_stats(
             else:
                 words[ref_word][0] += 1
                 num_corr += 1
-    ref_len = sum([len(r) for r, _ in results])
+
+    #ref_len = sum([len(r) for r, _ in results])
     sub_errs = sum(subs.values())
     ins_errs = sum(ins.values())
     del_errs = sum(dels.values())
@@ -467,12 +485,12 @@ def write_error_stats(
 
     if enable_log:
         logging.info(
-            f"[{test_set_name}] %WER {tot_errs / ref_len:.2%} "
+            f"[{test_set_name}] %{wer_str} {tot_errs / ref_len:.2%} "
             f"[{tot_errs} / {ref_len}, {ins_errs} ins, "
             f"{del_errs} del, {sub_errs} sub ]"
         )
 
-    print(f"%WER = {tot_err_rate}", file=f)
+    print(f"%{wer_str} = {tot_err_rate}", file=f)
     print(
         f"Errors: {ins_errs} insertions, {del_errs} deletions, "
         f"{sub_errs} substitutions, over {ref_len} reference "
@@ -488,6 +506,9 @@ def write_error_stats(
     print("", file=f)
     print("PER-UTT DETAILS: corr or (ref->hyp)  ", file=f)
     for ref, hyp in results:
+        if enable_cer:
+            ref = list(''.join(ref))
+            hyp = list(''.join(hyp))
         ali = kaldialign.align(ref, hyp, ERR)
         combine_successive_errors = True
         if combine_successive_errors:
