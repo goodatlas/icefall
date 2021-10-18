@@ -18,6 +18,7 @@
 
 import argparse
 import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Union
@@ -294,6 +295,19 @@ class ZerothSpeechAsrDataModule(DataModule):
                 else PrecomputedFeatures(),
                 return_cuts=self.args.return_cuts,
             )
+
+            #cuts_test = cuts_test.filter(lambda s: s.duration < 50)
+
+            # def remove_user_symbol(text, regex):
+            #    return re.sub(regex, " ", text)
+
+            # for item in cuts_test:
+            #    for supervisoin_segment in item.supervisions:
+            #        tmp = remove_user_symbol(
+            #            supervisoin_segment.text, r"<[A-Z]+>")
+            #        supervisoin_segment.text = re.sub(
+            #            r'(\ )+', ' ', tmp).strip()
+
             sampler = SingleCutSampler(
                 cuts_test, max_duration=self.args.max_duration
             )
@@ -333,7 +347,9 @@ class ZerothSpeechAsrDataModule(DataModule):
 
     @lru_cache()
     def test_cuts(self) -> List[CutSet]:
-        test_sets = ["test", "test2"]
+        # test_sets = ["test", "test2"]
+        test_sets = ["test"]
+        #test_sets = ["switchTest"]
         cuts = []
         for test_set in test_sets:
             logging.debug("About to get test cuts")
