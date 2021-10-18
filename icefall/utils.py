@@ -124,7 +124,7 @@ def setup_logger(
         level = logging.CRITICAL
 
     # https://discuss.pytorch.org/t/pytorch-1-8-distributed-mode-will-disable-python-logging-module/113897/7
-    if int(sys.version[0]) == 3 and int(sys.version_info[2]) >= 8:
+    if int(sys.version[0]) == 3 and int(sys.version_info[1]) >= 8:
         logging.basicConfig(
             filename=log_filename, format=formatter, level=level, filemode="w", force=True
         )
