@@ -20,26 +20,19 @@ import argparse
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import k2
 import torch
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule
+from asr_datamodule import AishellAsrDataModule
 from model import TdnnLstm
 
 from icefall.checkpoint import average_checkpoints, load_checkpoint
-from icefall.decode import (
-    get_lattice,
-    nbest_decoding,
-    one_best_decoding,
-    rescore_with_n_best_list,
-    rescore_with_whole_lattice,
-)
+from icefall.decode import get_lattice, nbest_decoding, one_best_decoding
 from icefall.lexicon import Lexicon
 from icefall.utils import (
     AttributeDict,
-    get_env_info,
     get_texts,
     setup_logger,
     store_transcripts,
@@ -71,44 +64,23 @@ def get_parser():
     parser.add_argument(
         "--method",
         type=str,
-        default="whole-lattice-rescoring",
+        default="1best",
         help="""Decoding method.
         Supported values are:
             - (1) 1best. Extract the best path from the decoding lattice as the
               decoding result.
             - (2) nbest. Extract n paths from the decoding lattice; the path
               with the highest score is the decoding result.
-            - (3) nbest-rescoring. Extract n paths from the decoding lattice,
-              rescore them with an n-gram LM (e.g., a 4-gram LM), the path with
-              the highest score is the decoding result.
-            - (4) whole-lattice-rescoring. Rescore the decoding lattice with an
-              n-gram LM (e.g., a 4-gram LM), the best path of rescored lattice
-              is the decoding result.
         """,
     )
-
     parser.add_argument(
         "--num-paths",
         type=int,
-        default=100,
+        default=30,
         help="""Number of paths for n-best based decoding method.
-        Used only when "method" is one of the following values:
-        nbest, nbest-rescoring
+        Used only when "method" is nbest.
         """,
     )
-
-    parser.add_argument(
-        "--nbest-scale",
-        type=float,
-        default=0.5,
-        help="""The scale to be applied to `lattice.scores`.
-        It's needed if you use any kinds of n-best based rescoring.
-        Used only when "method" is one of the following values:
-        nbest, nbest-rescoring
-        A smaller value results in more unique paths.
-        """,
-    )
-
     parser.add_argument(
         "--export",
         type=str2bool,
@@ -128,14 +100,15 @@ def get_params() -> AttributeDict:
             "exp_dir": Path("tdnn_lstm_ctc/exp/"),
             "lang_dir": Path("data/lang_phone"),
             "lm_dir": Path("data/lm"),
-            "feature_dim": 80,
+            # parameters for tdnn_lstm_ctc
             "subsampling_factor": 3,
+            "feature_dim": 80,
+            # parameters for decoding
             "search_beam": 20,
-            "output_beam": 5,
+            "output_beam": 7,
             "min_active_states": 30,
             "max_active_states": 10000,
             "use_double_scores": True,
-            "env_info": get_env_info(),
         }
     )
     return params
@@ -147,16 +120,15 @@ def decode_one_batch(
     HLG: k2.Fsa,
     batch: dict,
     lexicon: Lexicon,
-    G: Optional[k2.Fsa] = None,
-) -> Dict[str, List[List[str]]]:
+) -> Dict[str, List[List[int]]]:
     """Decode one batch and return the result in a dict. The dict has the
     following format:
 
         - key: It indicates the setting used for decoding. For example,
-               if no rescoring is used, the key is the string `no_rescore`.
-               If LM rescoring is used, the key is the string `lm_scale_xxx`,
-               where `xxx` is the value of `lm_scale`. An example key is
-               `lm_scale_0.7`
+               if the decoding method is 1best, the key is the string
+               `no_rescore`. If the decoding method is nbest, the key is the
+               string `no_rescore-xxx`, xxx is the num_paths.
+
         - value: It contains the decoding result. `len(value)` equals to
                  batch size. `value[i]` is the decoding result for the i-th
                  utterance in the given batch.
@@ -166,9 +138,6 @@ def decode_one_batch(
 
         - params.method is "1best", it uses 1best decoding without LM rescoring.
         - params.method is "nbest", it uses nbest decoding without LM rescoring.
-        - params.method is "nbest-rescoring", it uses nbest LM rescoring.
-        - params.method is "whole-lattice-rescoring", it uses whole lattice LM
-          rescoring.
 
       model:
         The neural model.
@@ -180,10 +149,6 @@ def decode_one_batch(
         for the format of the `batch`.
       lexicon:
         It contains word symbol table.
-      G:
-        An LM. It is not None when params.method is "nbest-rescoring"
-        or "whole-lattice-rescoring". In general, the G in HLG
-        is a 3-gram LM, while this G is a 4-gram LM.
     Returns:
       Return the decoding result. See above description for the format of
       the returned dict.
@@ -192,12 +157,12 @@ def decode_one_batch(
     feature = batch["inputs"]
     assert feature.ndim == 3
     feature = feature.to(device)
-    # at entry, feature is (N, T, C)
+    # at entry, feature is [N, T, C]
 
-    feature = feature.permute(0, 2, 1)  # now feature is (N, C, T)
+    feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
 
     nnet_output = model(feature)
-    # nnet_output is (N, T, C)
+    # nnet_output is [N, T, C]
 
     supervisions = batch["supervisions"]
 
@@ -212,7 +177,7 @@ def decode_one_batch(
 
     lattice = get_lattice(
         nnet_output=nnet_output,
-        decoding_graph=HLG,
+        HLG=HLG,
         supervision_segments=supervision_segments,
         search_beam=params.search_beam,
         output_beam=params.output_beam,
@@ -220,51 +185,22 @@ def decode_one_batch(
         max_active_states=params.max_active_states,
     )
 
-    if params.method in ["1best", "nbest"]:
-        if params.method == "1best":
-            best_path = one_best_decoding(
-                lattice=lattice, use_double_scores=params.use_double_scores
-            )
-            key = "no_rescore"
-        else:
-            best_path = nbest_decoding(
-                lattice=lattice,
-                num_paths=params.num_paths,
-                use_double_scores=params.use_double_scores,
-                nbest_scale=params.nbest_scale,
-            )
-            key = f"no_rescore-{params.num_paths}"
-        hyps = get_texts(best_path)
-        hyps = [[lexicon.word_table[i] for i in ids] for ids in hyps]
-        return {key: hyps}
-
-    assert params.method in ["nbest-rescoring", "whole-lattice-rescoring"]
-
-    lm_scale_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-    lm_scale_list += [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
-    lm_scale_list += [1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
-
-    if params.method == "nbest-rescoring":
-        best_path_dict = rescore_with_n_best_list(
-            lattice=lattice,
-            G=G,
-            num_paths=params.num_paths,
-            lm_scale_list=lm_scale_list,
-            nbest_scale=params.nbest_scale,
+    assert params.method in ["1best", "nbest"]
+    if params.method == "1best":
+        best_path = one_best_decoding(
+            lattice=lattice, use_double_scores=params.use_double_scores
         )
+        key = "no_rescore"
     else:
-        best_path_dict = rescore_with_whole_lattice(
+        best_path = nbest_decoding(
             lattice=lattice,
-            G_with_epsilon_loops=G,
-            lm_scale_list=lm_scale_list,
+            num_paths=params.num_paths,
+            use_double_scores=params.use_double_scores,
         )
-
-    ans = dict()
-    for lm_scale_str, best_path in best_path_dict.items():
-        hyps = get_texts(best_path)
-        hyps = [[lexicon.word_table[i] for i in ids] for ids in hyps]
-        ans[lm_scale_str] = hyps
-    return ans
+        key = f"no_rescore-{params.num_paths}"
+    hyps = get_texts(best_path)
+    hyps = [[lexicon.word_table[i] for i in ids] for ids in hyps]
+    return {key: hyps}
 
 
 def decode_dataset(
@@ -273,8 +209,7 @@ def decode_dataset(
     model: nn.Module,
     HLG: k2.Fsa,
     lexicon: Lexicon,
-    G: Optional[k2.Fsa] = None,
-) -> Dict[str, List[Tuple[List[str], List[str]]]]:
+) -> Dict[str, List[Tuple[List[int], List[int]]]]:
     """Decode dataset.
 
     Args:
@@ -288,13 +223,9 @@ def decode_dataset(
         The decoding graph.
       lexicon:
         It contains word symbol table.
-      G:
-        An LM. It is not None when params.method is "nbest-rescoring"
-        or "whole-lattice-rescoring". In general, the G in HLG
-        is a 3-gram LM, while this G is a 4-gram LM.
     Returns:
-      Return a dict, whose key may be "no-rescore" if no LM rescoring
-      is used, or it may be "lm_scale_0.7" if LM rescoring is used.
+      Return a dict, whose key may be "no-rescore" if decoding method is 1best,
+      or it may be "no-rescoer-100" if decoding method is nbest.
       Its value is a list of tuples. Each tuple contains two elements:
       The first is the reference transcript, and the second is the
       predicted result.
@@ -318,7 +249,6 @@ def decode_dataset(
             HLG=HLG,
             batch=batch,
             lexicon=lexicon,
-            G=G,
         )
 
         for lm_scale, hyps in hyps_dict.items():
@@ -355,20 +285,24 @@ def save_results(
         # The following prints out WERs, per-word error statistics and aligned
         # ref/hyp pairs.
         errs_filename = params.exp_dir / f"errs-{test_set_name}-{key}.txt"
+        # We compute CER for aishell dataset.
+        results_char = []
+        for res in results:
+            results_char.append((list("".join(res[0])), list("".join(res[1]))))
         with open(errs_filename, "w") as f:
-            wer = write_error_stats(f, f"{test_set_name}-{key}", results)
+            wer = write_error_stats(f, f"{test_set_name}-{key}", results_char)
             test_set_wers[key] = wer
 
         logging.info("Wrote detailed error stats to {}".format(errs_filename))
 
     test_set_wers = sorted(test_set_wers.items(), key=lambda x: x[1])
-    errs_info = params.exp_dir / f"wer-summary-{test_set_name}.txt"
+    errs_info = params.exp_dir / f"cer-summary-{test_set_name}.txt"
     with open(errs_info, "w") as f:
-        print("settings\tWER", file=f)
+        print("settings\tCER", file=f)
         for key, val in test_set_wers:
             print("{}\t{}".format(key, val), file=f)
 
-    s = "\nFor {}, WER of different settings are:\n".format(test_set_name)
+    s = "\nFor {}, CER of different settings are:\n".format(test_set_name)
     note = "\tbest for {}".format(test_set_name)
     for key, val in test_set_wers:
         s += "{}\t{}{}\n".format(key, val, note)
@@ -379,7 +313,7 @@ def save_results(
 @torch.no_grad()
 def main():
     parser = get_parser()
-    LibriSpeechAsrDataModule.add_arguments(parser)
+    AishellAsrDataModule.add_arguments(parser)
     args = parser.parse_args()
 
     params = get_params()
@@ -407,45 +341,6 @@ def main():
     if not hasattr(HLG, "lm_scores"):
         HLG.lm_scores = HLG.scores.clone()
 
-    if params.method in ["nbest-rescoring", "whole-lattice-rescoring"]:
-        if not (params.lm_dir / "G_4_gram.pt").is_file():
-            logging.info("Loading G_4_gram.fst.txt")
-            logging.warning("It may take 8 minutes.")
-            with open(params.lm_dir / "G_4_gram.fst.txt") as f:
-                first_word_disambig_id = lexicon.word_table["#0"]
-
-                G = k2.Fsa.from_openfst(f.read(), acceptor=False)
-                # G.aux_labels is not needed in later computations, so
-                # remove it here.
-                del G.aux_labels
-                # CAUTION: The following line is crucial.
-                # Arcs entering the back-off state have label equal to #0.
-                # We have to change it to 0 here.
-                G.labels[G.labels >= first_word_disambig_id] = 0
-                # See https://github.com/k2-fsa/k2/issues/874
-                # for why we need to set G.properties to None
-                G.__dict__["_properties"] = None
-                G = k2.Fsa.from_fsas([G]).to(device)
-                G = k2.arc_sort(G)
-                torch.save(G.as_dict(), params.lm_dir / "G_4_gram.pt")
-        else:
-            logging.info("Loading pre-compiled G_4_gram.pt")
-            d = torch.load(params.lm_dir / "G_4_gram.pt", map_location="cpu")
-            G = k2.Fsa.from_dict(d).to(device)
-
-        if params.method == "whole-lattice-rescoring":
-            # Add epsilon self-loops to G as we will compose
-            # it with the whole lattice later
-            G = k2.add_epsilon_self_loops(G)
-            G = k2.arc_sort(G)
-            G = G.to(device)
-
-        # G.lm_scores is used to replace HLG.lm_scores during
-        # LM rescoring.
-        G.lm_scores = G.scores.clone()
-    else:
-        G = None
-
     model = TdnnLstm(
         num_features=params.feature_dim,
         num_classes=max_phone_id + 1,  # +1 for the blank symbol
@@ -460,35 +355,32 @@ def main():
             if start >= 0:
                 filenames.append(f"{params.exp_dir}/epoch-{i}.pt")
         logging.info(f"averaging {filenames}")
-        model.to(device)
-        model.load_state_dict(average_checkpoints(filenames, device=device))
+        model.load_state_dict(average_checkpoints(filenames))
 
     if params.export:
         logging.info(f"Export averaged model to {params.exp_dir}/pretrained.pt")
         torch.save(
             {"model": model.state_dict()}, f"{params.exp_dir}/pretrained.pt"
         )
-        return
 
     model.to(device)
     model.eval()
 
-    librispeech = LibriSpeechAsrDataModule(args)
+    aishell = AishellAsrDataModule(args)
     # CAUTION: `test_sets` is for displaying only.
     # If you want to skip test-clean, you have to skip
     # it inside the for loop. That is, use
     #
     #   if test_set == 'test-clean': continue
     #
-    test_sets = ["test-clean", "test-other"]
-    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
+    test_sets = ["test"]
+    for test_set, test_dl in zip(test_sets, aishell.test_dataloaders()):
         results_dict = decode_dataset(
             dl=test_dl,
             params=params,
             model=model,
             HLG=HLG,
             lexicon=lexicon,
-            G=G,
         )
 
         save_results(

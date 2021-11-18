@@ -101,12 +101,9 @@ def compile_HLG(lang_dir: str) -> k2.Fsa:
     logging.info("Removing disambiguation symbols on LG")
 
     LG.labels[LG.labels >= first_token_disambig_id] = 0
-    # See https://github.com/k2-fsa/k2/issues/874
-    # for why we need to set LG.properties to None
-    LG.__dict__["_properties"] = None
 
     assert isinstance(LG.aux_labels, k2.RaggedTensor)
-    LG.aux_labels.values[LG.aux_labels.values >= first_word_disambig_id] = 0
+    LG.aux_labels.data[LG.aux_labels.data >= first_word_disambig_id] = 0
 
     LG = k2.remove_epsilon(LG)
     logging.info(f"LG shape after k2.remove_epsilon: {LG.shape}")
