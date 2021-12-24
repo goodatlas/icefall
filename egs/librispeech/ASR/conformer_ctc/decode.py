@@ -40,14 +40,13 @@ from icefall.decode import (
     rescore_with_n_best_list,
     rescore_with_whole_lattice,
 )
+from icefall.env import get_env_info
 from icefall.lexicon import Lexicon
 from icefall.utils import (
     AttributeDict,
-    get_env_info,
     get_texts,
     setup_logger,
     store_transcripts,
-    str2bool,
     write_error_stats,
 )
 
@@ -119,17 +118,6 @@ def get_parser():
         Used only when "method" is one of the following values:
         nbest, nbest-rescoring, attention-decoder, and nbest-oracle
         A smaller value results in more unique paths.
-        """,
-    )
-
-    parser.add_argument(
-        "--export",
-        type=str2bool,
-        default=False,
-        help="""When enabled, the averaged model is saved to
-        conformer_ctc/exp/pretrained.pt. Note: only model.state_dict() is saved.
-        pretrained.pt contains a dict {"model": model.state_dict()},
-        which can be loaded by `icefall.checkpoint.load_checkpoint()`.
         """,
     )
 
@@ -440,8 +428,6 @@ def decode_dataset(
       The first is the reference transcript, and the second is the
       predicted result.
     """
-    results = []
-
     num_cuts = 0
 
     try:
@@ -627,7 +613,7 @@ def main():
                 # Save a dummy value so that it can be loaded in C++.
                 # See https://github.com/pytorch/pytorch/issues/67902
                 # for why we need to do this.
-                G["dummy"] = 1
+                G.dummy = 1
 
                 torch.save(G.as_dict(), params.lm_dir / "G_4_gram.pt")
         else:
@@ -671,27 +657,23 @@ def main():
         model.to(device)
         model.load_state_dict(average_checkpoints(filenames, device=device))
 
-    if params.export:
-        logging.info(f"Export averaged model to {params.exp_dir}/pretrained.pt")
-        torch.save(
-            {"model": model.state_dict()}, f"{params.exp_dir}/pretrained.pt"
-        )
-        return
-
     model.to(device)
     model.eval()
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of model parameters: {num_param}")
 
     librispeech = LibriSpeechAsrDataModule(args)
-    # CAUTION: `test_sets` is for displaying only.
-    # If you want to skip test-clean, you have to skip
-    # it inside the for loop. That is, use
-    #
-    #   if test_set == 'test-clean': continue
-    #
+
+    test_clean_cuts = librispeech.test_clean_cuts()
+    test_other_cuts = librispeech.test_other_cuts()
+
+    test_clean_dl = librispeech.test_dataloaders(test_clean_cuts)
+    test_other_dl = librispeech.test_dataloaders(test_other_cuts)
+
     test_sets = ["test-clean", "test-other"]
-    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
+    test_dl = [test_clean_dl, test_other_dl]
+
+    for test_set, test_dl in zip(test_sets, test_dl):
         results_dict = decode_dataset(
             dl=test_dl,
             params=params,

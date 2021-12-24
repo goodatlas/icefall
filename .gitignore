@@ -8,3 +8,6 @@ exp*/
 download
 worker-*
 dask-worker.*
+*.bak
+*-bak
+*bak.py
