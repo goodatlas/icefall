@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import copy
 import math
 import warnings
 from typing import Optional, Tuple
@@ -56,7 +56,6 @@ class Conformer(Transformer):
         cnn_module_kernel: int = 31,
         normalize_before: bool = True,
         vgg_frontend: bool = False,
-        use_feat_batchnorm: bool = False,
     ) -> None:
         super(Conformer, self).__init__(
             num_features=num_features,
@@ -69,7 +68,6 @@ class Conformer(Transformer):
             dropout=dropout,
             normalize_before=normalize_before,
             vgg_frontend=vgg_frontend,
-            use_feat_batchnorm=use_feat_batchnorm,
         )
 
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
@@ -107,11 +105,6 @@ class Conformer(Transformer):
             - logit_lens, a tensor of shape (batch_size,) containing the number
               of frames in `logits` before padding.
         """
-        if self.use_feat_batchnorm:
-            x = x.permute(0, 2, 1)  # (N, T, C) -> (N, C, T)
-            x = self.feat_batchnorm(x)
-            x = x.permute(0, 2, 1)  # (N, C, T) -> (N, T, C)
-
         x = self.encoder_embed(x)
         x, pos_emb = self.encoder_pos(x)
         x = x.permute(1, 0, 2)  # (N, T, C) -> (T, N, C)
@@ -271,13 +264,12 @@ class ConformerEncoderLayer(nn.Module):
         return src
 
 
-class ConformerEncoder(nn.TransformerEncoder):
+class ConformerEncoder(nn.Module):
     r"""ConformerEncoder is a stack of N encoder layers
 
     Args:
         encoder_layer: an instance of the ConformerEncoderLayer() class (required).
         num_layers: the number of sub-encoder-layers in the encoder (required).
-        norm: the layer normalization component (optional).
 
     Examples::
         >>> encoder_layer = ConformerEncoderLayer(d_model=512, nhead=8)
@@ -287,12 +279,12 @@ class ConformerEncoder(nn.TransformerEncoder):
         >>> out = conformer_encoder(src, pos_emb)
     """
 
-    def __init__(
-        self, encoder_layer: nn.Module, num_layers: int, norm: nn.Module = None
-    ) -> None:
-        super(ConformerEncoder, self).__init__(
-            encoder_layer=encoder_layer, num_layers=num_layers, norm=norm
+    def __init__(self, encoder_layer: nn.Module, num_layers: int) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(
+            [copy.deepcopy(encoder_layer) for i in range(num_layers)]
         )
+        self.num_layers = num_layers
 
     def forward(
         self,
@@ -326,9 +318,6 @@ class ConformerEncoder(nn.TransformerEncoder):
                 src_mask=mask,
                 src_key_padding_mask=src_key_padding_mask,
             )
-
-        if self.norm is not None:
-            output = self.norm(output)
 
         return output
 
@@ -650,6 +639,7 @@ class RelPositionMultiheadAttention(nn.Module):
             if _b is not None:
                 _b = _b[_start:_end]
             q = nn.functional.linear(query, _w, _b)
+
             # This is inline in_proj function with in_proj_weight and in_proj_bias
             _b = in_proj_bias
             _start = embed_dim
@@ -873,7 +863,7 @@ class ConvolutionModule(nn.Module):
             groups=channels,
             bias=bias,
         )
-        self.norm = nn.BatchNorm1d(channels)
+        self.norm = nn.LayerNorm(channels)
         self.pointwise_conv2 = nn.Conv1d(
             channels,
             channels,
@@ -903,7 +893,12 @@ class ConvolutionModule(nn.Module):
 
         # 1D Depthwise Conv
         x = self.depthwise_conv(x)
-        x = self.activation(self.norm(x))
+        # x is (batch, channels, time)
+        x = x.permute(0, 2, 1)
+        x = self.norm(x)
+        x = x.permute(0, 2, 1)
+
+        x = self.activation(x)
 
         x = self.pointwise_conv2(x)  # (batch, channel, time)
 

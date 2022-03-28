@@ -20,13 +20,14 @@ import torch.nn.functional as F
 
 
 class Decoder(nn.Module):
-    """This class implements the stateless decoder from the following paper:
+    """This class modifies the stateless decoder from the following paper:
 
         RNN-transducer with stateless prediction network
         https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=9054419
 
     It removes the recurrent connection from the decoder, i.e., the prediction
-    network.
+    network. Different from the above paper, it adds an extra Conv1d
+    right after the embedding layer.
 
     TODO: Implement https://arxiv.org/pdf/2109.07513.pdf
     """
@@ -74,24 +75,24 @@ class Decoder(nn.Module):
         """
         Args:
           y:
-            A 2-D tensor of shape (N, U) with blank prepended.
+            A 2-D tensor of shape (N, U).
           need_pad:
             True to left pad the input. Should be True during training.
             False to not pad the input. Should be False during inference.
         Returns:
           Return a tensor of shape (N, U, embedding_dim).
         """
-        embeding_out = self.embedding(y)
+        embedding_out = self.embedding(y)
         if self.context_size > 1:
-            embeding_out = embeding_out.permute(0, 2, 1)
+            embedding_out = embedding_out.permute(0, 2, 1)
             if need_pad is True:
-                embeding_out = F.pad(
-                    embeding_out, pad=(self.context_size - 1, 0)
+                embedding_out = F.pad(
+                    embedding_out, pad=(self.context_size - 1, 0)
                 )
             else:
                 # During inference time, there is no need to do extra padding
                 # as we only need one output
-                assert embeding_out.size(-1) == self.context_size
-            embeding_out = self.conv(embeding_out)
-            embeding_out = embeding_out.permute(0, 2, 1)
-        return embeding_out
+                assert embedding_out.size(-1) == self.context_size
+            embedding_out = self.conv(embedding_out)
+            embedding_out = embedding_out.permute(0, 2, 1)
+        return embedding_out
