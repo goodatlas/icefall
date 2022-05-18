@@ -110,7 +110,12 @@ class Conformer(Transformer):
         x = x.permute(1, 0, 2)  # (N, T, C) -> (T, N, C)
 
         # Caution: We assume the subsampling factor is 4!
-        lengths = ((x_lens - 1) // 2 - 1) // 2
+
+        #  lengths = ((x_lens - 1) // 2 - 1) // 2 # issue an warning
+        #
+        # Note: rounding_mode in torch.div() is available only in torch >= 1.8.0
+        lengths = (((x_lens - 1) >> 1) - 1) >> 1
+
         assert x.size(0) == lengths.max().item()
         mask = make_pad_mask(lengths)
 

@@ -23,9 +23,18 @@ on:
   pull_request:
     types: [labeled]
 
+  schedule:
+    # minute (0-59)
+    # hour (0-23)
+    # day of the month (1-31)
+    # month (1-12)
+    # day of the week (0-6)
+    # nightly build at 15:50 UTC time every day
+    - cron: "50 15 * * *"
+
 jobs:
   run_pre_trained_transducer_stateless_multi_datasets_librispeech_100h:
-    if: github.event.label.name == 'ready' || github.event_name == 'push'
+    if: github.event.label.name == 'ready' || github.event.label.name == 'run-decode' || github.event_name == 'push' || github.event_name == 'schedule'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -38,11 +47,6 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 0
-
-      - name: Install graphviz
-        shell: bash
-        run: |
-          sudo apt-get -qq install graphviz
 
       - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v2
@@ -67,106 +71,82 @@ jobs:
         if: steps.my-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          mkdir -p ~/tmp
-          cd ~/tmp
-          git clone https://github.com/csukuangfj/kaldifeat
-          cd kaldifeat
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=Release ..
-          make -j2 _kaldifeat
+          .github/scripts/install-kaldifeat.sh
 
-      - name: Download pre-trained model
+      - name: Cache LibriSpeech test-clean and test-other datasets
+        id: libri-test-clean-and-test-other-data
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/tmp/download
+          key: cache-libri-test-clean-and-test-other
+
+      - name: Download LibriSpeech test-clean and test-other
+        if: steps.libri-test-clean-and-test-other-data.outputs.cache-hit != 'true'
         shell: bash
         run: |
+          .github/scripts/download-librispeech-test-clean-and-test-other-dataset.sh
+
+      - name: Prepare manifests for LibriSpeech test-clean and test-other
+        shell: bash
+        run: |
+          .github/scripts/prepare-librispeech-test-clean-and-test-other-manifests.sh
+
+      - name: Cache LibriSpeech test-clean and test-other fbank features
+        id: libri-test-clean-and-test-other-fbank
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/tmp/fbank-libri
+          key: cache-libri-fbank-test-clean-and-test-other
+
+      - name: Compute fbank for LibriSpeech test-clean and test-other
+        if: steps.libri-test-clean-and-test-other-fbank.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          .github/scripts/compute-fbank-librispeech-test-clean-and-test-other.sh
+
+      - name: Inference with pre-trained model
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_LABEL_NAME: ${{ github.event.label.name }}
+        run: |
+          mkdir -p egs/librispeech/ASR/data
+          ln -sfv ~/tmp/fbank-libri egs/librispeech/ASR/data/fbank
+          ls -lh egs/librispeech/ASR/data/*
+
           sudo apt-get -qq install git-lfs tree sox
-          cd egs/librispeech/ASR
-          mkdir tmp
-          cd tmp
-          git lfs install
-          git clone https://huggingface.co/csukuangfj/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21
-
-          cd ..
-          tree tmp
-          soxi tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/*.wav
-          ls -lh tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/*.wav
-
-      - name: Run greedy search decoding (max-sym-per-frame 1)
-        shell: bash
-        run: |
           export PYTHONPATH=$PWD:$PYTHONPATH
           export PYTHONPATH=~/tmp/kaldifeat/kaldifeat/python:$PYTHONPATH
           export PYTHONPATH=~/tmp/kaldifeat/build/lib:$PYTHONPATH
-          cd egs/librispeech/ASR
-          ./transducer_stateless_multi_datasets/pretrained.py \
-            --method greedy_search \
-            --max-sym-per-frame 1 \
-            --checkpoint ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/exp/pretrained.pt \
-            --bpe-model ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/data/lang_bpe_500/bpe.model \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1089-134686-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0002.wav
 
-      - name: Run greedy search decoding (max-sym-per-frame 2)
+          .github/scripts/run-pre-trained-transducer-stateless-librispeech-100h.sh
+
+      - name: Display decoding results for transducer_stateless_multi_datasets
+        if: github.event_name == 'schedule' || github.event.label.name == 'run-decode'
         shell: bash
         run: |
-          export PYTHONPATH=$PWD:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/kaldifeat/python:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/build/lib:$PYTHONPATH
-          cd egs/librispeech/ASR
-          ./transducer_stateless_multi_datasets/pretrained.py \
-            --method greedy_search \
-            --max-sym-per-frame 2 \
-            --checkpoint ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/exp/pretrained.pt \
-            --bpe-model ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/data/lang_bpe_500/bpe.model \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1089-134686-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0002.wav
+          cd egs/librispeech/ASR/
+          tree ./transducer_stateless_multi_datasets/exp
 
-      - name: Run greedy search decoding (max-sym-per-frame 3)
-        shell: bash
-        run: |
-          export PYTHONPATH=$PWD:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/kaldifeat/python:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/build/lib:$PYTHONPATH
-          cd egs/librispeech/ASR
-          ./transducer_stateless_multi_datasets/pretrained.py \
-            --method greedy_search \
-            --max-sym-per-frame 3 \
-            --checkpoint ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/exp/pretrained.pt \
-            --bpe-model ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/data/lang_bpe_500/bpe.model \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1089-134686-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0002.wav
+          cd transducer_stateless_multi_datasets
+          echo "results for transducer_stateless_multi_datasets"
+          echo "===greedy search==="
+          find exp/greedy_search -name "log-*" -exec grep -n --color "best for test-clean" {} + | sort -n -k2
+          find exp/greedy_search -name "log-*" -exec grep -n --color "best for test-other" {} + | sort -n -k2
 
-      - name: Run beam search decoding
-        shell: bash
-        run: |
-          export PYTHONPATH=$PWD:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/kaldifeat/python:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/build/lib:$PYTHONPATH
-          cd egs/librispeech/ASR
-          ./transducer_stateless_multi_datasets/pretrained.py \
-            --method beam_search \
-            --beam-size 4 \
-            --checkpoint ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/exp/pretrained.pt \
-            --bpe-model ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/data/lang_bpe_500/bpe.model \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1089-134686-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0002.wav
+          echo "===fast_beam_search==="
+          find exp/fast_beam_search -name "log-*" -exec grep -n --color "best for test-clean" {} + | sort -n -k2
+          find exp/fast_beam_search -name "log-*" -exec grep -n --color "best for test-other" {} + | sort -n -k2
 
-      - name: Run modified beam search decoding
-        shell: bash
-        run: |
-          export PYTHONPATH=$PWD:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/kaldifeat/python:$PYTHONPATH
-          export PYTHONPATH=~/tmp/kaldifeat/build/lib:$PYTHONPATH
-          cd egs/librispeech/ASR
-          ./transducer_stateless_multi_datasets/pretrained.py \
-            --method modified_beam_search \
-            --beam-size 4 \
-            --checkpoint ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/exp/pretrained.pt \
-            --bpe-model ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/data/lang_bpe_500/bpe.model \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1089-134686-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0001.wav \
-            ./tmp/icefall-asr-librispeech-100h-transducer-stateless-multi-datasets-bpe-500-2022-02-21/test_wavs/1221-135766-0002.wav
+          echo "===modified beam search==="
+          find exp/modified_beam_search -name "log-*" -exec grep -n --color "best for test-clean" {} + | sort -n -k2
+          find exp/modified_beam_search -name "log-*" -exec grep -n --color "best for test-other" {} + | sort -n -k2
+
+      - name: Upload decoding results for transducer_stateless_multi_datasets
+        uses: actions/upload-artifact@v2
+        if: github.event_name == 'schedule' || github.event.label.name == 'run-decode'
+        with:
+          name: torch-${{ matrix.torch }}-python-${{ matrix.python-version }}-ubuntu-18.04-cpu-transducer_stateless_multi_datasets-100h-2022-02-21
+          path: egs/librispeech/ASR/transducer_stateless_multi_datasets/exp/
